@@ -3,6 +3,8 @@
 This repository contains the code to compute dinucleotide forces (for a definition
 give a look a [this paper](https://www.pnas.org/content/111/13/5054.short)),
 as well as a simple example of its use.
+For any question or comment concerning the code please contact Andrea Di Gioacchino,
+<andrea.dgioacchino@gmail.com>.
 
 All of the code is written in Python3.
 
@@ -21,3 +23,6 @@ of a given sequence according to the model in this case.
 - The `forces_example.ipynb` notebook contains a short tutorial of the
 usage of the scripts.
 
+
+## Acknowledgements
+Previous versions of these algorithms were developed by Alexander Solovyov and Petr Šulc.
