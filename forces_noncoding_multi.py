@@ -21,7 +21,7 @@ def _compute_frequences(seq, alphabet):
         freq[i] = _occurrences(seq, alphabet[i]) / L
     return freq
 
-def _DimerForce_fast(seq, motifs, tolerance_n=0.01, eps = None, max_iter=100, freqs = [0,0,0,0]):
+def _DimerForce_fast(seq, motifs, tolerance_n=0.01, eps = None, max_iter=100, freqs = [0,0,0,0], add_pseudocount=True):
     """Return the forces on the motifs 'motifs' computed for sequence 'seq' with the fequency bias given.
     Notice that seq is used only to compute the number of observed motifs (and the frequences if they are
     not provided by user). Also notice that if motifs are
@@ -35,7 +35,7 @@ def _DimerForce_fast(seq, motifs, tolerance_n=0.01, eps = None, max_iter=100, fr
         pass
     n_obs = [_occurrences(seq, m) for m in motifs]
 
-    dnf = _calc_force_fast(freqs, n_obs, L, motifs, tolerance_n, eps, max_iter)
+    dnf = _calc_force_fast(freqs, n_obs, L, motifs, tolerance_n, eps, max_iter, add_pseudocount)
     return dnf
 
 def _eval_log_Z(freqs, forces, motifs, L):
@@ -121,13 +121,17 @@ def _generate_freqsM(freqs, last):
                 res_mat[i][j] = p_nt1 * p_nt2
     return res_mat
 
-def _calc_force_fast(freqs, n_obs, L, motifs, tolerance_n, eps, max_iter):
+def _calc_force_fast(freqs, n_obs, L, motifs, tolerance_n, eps, max_iter, add_pseudocount):
     """Compute the optimal estimate of the forces to explain the observed number of motifs,
     by starting from all forces equal to zero and implementing a Newton-Raphson method."""
     if eps is None:
         eps = tolerance_n / 10.
     n_motifs = len(motifs)
     n_obs = np.array(n_obs) # this must be a numpy array
+    if add_pseudocount:
+        for i, no in enumerate(n_obs):
+            if no == 0:
+                n_obs[i] = 1
     forces = np.zeros(n_motifs)
     deltas = np.diag(np.full(n_motifs, eps))
     for l in range(0, max_iter):
@@ -159,26 +163,42 @@ def _calc_force_fast(freqs, n_obs, L, motifs, tolerance_n, eps, max_iter):
         forces += df
     return forces
 
-def compute_force_noncoding(seq, motifs, sliding_window_length = None, freqs = [0,0,0,0]):
+
+def compute_force_noncoding(seq, motifs, sliding_window_length = None, freqs = [0,0,0,0], 
+                             adaptive_sliding_windows=False, add_pseudocount=True):
     """Compute forces on motifs 'motifs' sliding windows of sequence 'seq', each sliding
     window being of size 'sliding_window_length' and moving of 1 nt each time.
-    If the frequences are not specified, compute them on the whole sequence."""
+    If the frequences are not specified, compute them on the whole sequence. When 
+    adaptive_sliding_windows=True, the sliding window size shrinks at the sequence ends.
+    If add_pseudocount, when the number of motif is 0 in seq (or sliding window), the 
+    force is computed for num motif = 1."""
     if np.sum(freqs) == 0:
         alphabet = ['A', 'C', 'G', 'T']
         freqs = _compute_frequences(seq, alphabet)
     else:
         pass
     if sliding_window_length == None:
-        sliding_window_length = len(seq)
+        print('Not using sliding windows.')
+        return _DimerForce_fast(seq, motifs, freqs=freqs)
     sliding_window_shift = 1
-    l = len(seq) - sliding_window_length + 1
+    if adaptive_sliding_windows:
+        l = len(seq) // sliding_window_shift
+        half_len = sliding_window_length // 2
+    else:   
+        l = len(seq) - sliding_window_length + 1
     forces = np.zeros((l, len(motifs)))
     for i in range(l):
-        w_start = i * sliding_window_shift
-        w_end = i * sliding_window_shift + sliding_window_length
+        if adaptive_sliding_windows:
+            pos = sliding_window_shift * i
+            w_start = max(0, pos - half_len)
+            w_end = min(len(seq), pos + half_len)
+        else:
+            w_start = i * sliding_window_shift
+            w_end = i * sliding_window_shift + sliding_window_length
         t_seq = seq[w_start:w_end]
-        forces[i] = _DimerForce_fast(t_seq, motifs, freqs=freqs)
+        forces[i] = _DimerForce_fast(t_seq, motifs, freqs=freqs, add_pseudocount=add_pseudocount)
     return forces
+
 
 def compute_log_probability(seq, forces, motifs, freqs = [0,0,0,0]):
     """Compute the log-probability of a sequence, given the nucleotide frequences and motifs forces.

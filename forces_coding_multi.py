@@ -18,7 +18,7 @@ def _occurrences(string, sub):
             return count
 
 
-def _DimerForceCodons_fast(seq, n_obs, motifs, codon_bias=None, tolerance=0.1, eps=None, max_iter=100):
+def _DimerForceCodons_fast(seq, n_obs, motifs, codon_bias=None, tolerance=0.1, eps=None, max_iter=100, add_pseudocount=True):
     """Return the forces on the motifs 'motifs' computed for sequence 'seq' with the codon bias given.
     Notice that seq is used only to compute the amino acid sequence. Also notice that if motifs are
     dinucleotides, only up to 12 of them are independent. Finally, tolerance, eps and max_iter are 
@@ -30,8 +30,9 @@ def _DimerForceCodons_fast(seq, n_obs, motifs, codon_bias=None, tolerance=0.1, e
         cb = codon_bias
     mot_Ms = _generate_motif_Ms(seqAA, motifs)
     cod_Ms = _generate_codonbias_Ms(seqAA, cb)
-    forces = _calc_force_codons_fast(n_obs, mot_Ms, cod_Ms, tolerance, eps, max_iter)
+    forces = _calc_force_codons_fast(n_obs, mot_Ms, cod_Ms, tolerance, eps, max_iter, add_pseudocount)
     return forces
+
 
 def _generate_motsM(aa1, aa2, motifs, last=False):
     """Given two amino acids, aa1 and aa2, return the matrices used for the computation of the
@@ -158,13 +159,17 @@ def _eval_log_Z(Ms, codon_ms, forces):
         log_factors += np.log(t_factor)
     return np.log(np.sum(vec)) + log_factors
 
-def _calc_force_codons_fast(n_obs, Ms, freqs_Ms, tolerance_n, eps, max_iter):
+def _calc_force_codons_fast(n_obs, Ms, freqs_Ms, tolerance_n, eps, max_iter, add_pseudocount):
     """Compute the optimal estimate of the forces to explain the observed number of motifs,
     by starting from all forces equal to zero and implementing a Newton-Raphson method."""
     if eps is None:
         eps = tolerance_n / 10.
     n_motifs = len(Ms)
     n_obs = np.array(n_obs) # this must be a numpy array
+    if add_pseudocount:
+        for i, no in enumerate(n_obs):
+            if no == 0:
+                n_obs[i] = 1
     forces = np.zeros(n_motifs)
     deltas = np.diag(np.full(n_motifs,eps))
     for l in range(0, max_iter):
@@ -201,23 +206,24 @@ def _calc_force_codons_fast(n_obs, Ms, freqs_Ms, tolerance_n, eps, max_iter):
         forces += df
     return forces
 
-
 def _count_and_drop_gaps(seq):
     """Return the sequence without gaps."""
     count = _occurrences(seq, '-')
     return count, seq.replace('-','')
+   
 
-def compute_forces_coding(seq, motifs, sliding_window_length = 900, codon_bias=None):
+def compute_forces_coding(seq, motifs, sliding_window_length = None, codon_bias=None,
+                          adaptive_sliding_windows=False, add_pseudocount=True):
     """ Compute forces on motifs 'motifs' sliding windows of sequence 'seq', each sliding
     window being of size 'sliding_window_length' and moving of 3 nt each time.
     Takes also into account gaps: the sliding window is computed on the sequence with gaps,
     then the gap are removed and the force is computed on the remaining part. This should be 
     fine, provided that the number of gaps is not too high (in that case the 
     sliding window lenght should be increased). Use codon_bias = 'human' to use human codon bias
-    from file."""
+    from file. When adaptive_sliding_windows=True, the sliding window size shrinks at the 
+    sequence ends. If add_pseudocount, when the number of motif is 0 in seq (or sliding window), 
+    the force is computed for num motif = 1."""
     sliding_window_shift = 3 # shift of 1 amino acid each time
-    Ltot = (len(seq) - sliding_window_length)//3 + 1
-    forces = np.zeros((Ltot, len(motifs)))
     warning = True
     if codon_bias == 'human': # load human codon bias from file
         c_bias = np.zeros(64)
@@ -232,21 +238,36 @@ def compute_forces_coding(seq, motifs, sliding_window_length = 900, codon_bias=N
         c_bias = _count_codons(seq, normalize=True, uniform=True)
     else:
         c_bias = codon_bias
-    for i in range(Ltot):
-        if Ltot > 10000:
-            print('Long job detected, starting verbose mode')
-            if i % 1000 == 0:
-                print('Done', i, 'windows out of')
-        w_start = i * sliding_window_shift
-        w_end = i * sliding_window_shift + sliding_window_length
+    if sliding_window_length == None:
+        print('Not using sliding windows.')
+        n_obs = [_occurrences(seq, m) for m in motifs]
+        return _DimerForceCodons_fast(seq, n_obs, motifs, codon_bias=c_bias)
+    while (sliding_window_length//2) % 3 != 0:
+        print('Half sliding_window_length must be mutiple of 3. Correcting...')
+        sliding_window_length += 1
+        print('new sliding_window_length:', sliding_window_length)
+    if adaptive_sliding_windows:
+        l = len(seq) // sliding_window_shift
+        half_len = sliding_window_length // 2
+    else:   
+        l =  (len(seq) - sliding_window_length)//sliding_window_shift + 1
+    forces = np.zeros((l, len(motifs)))
+    for i in range(l):
+        if adaptive_sliding_windows:
+            pos = sliding_window_shift * i
+            w_start = max(0, pos - half_len)
+            w_end = min(len(seq), pos + half_len)
+        else:
+            w_start = i * sliding_window_shift
+            w_end = i * sliding_window_shift + sliding_window_length
         t_seq = seq[w_start:w_end]
         num_gap, t_seq = _count_and_drop_gaps(t_seq)
         if num_gap >= sliding_window_length / 3 and warning:
             print('Warning: many gaps are present, expect lower quality result:', num_gap ,'gaps in', 
-                  sliding_window_length,'nt long window (further warning suppressed).')
+                    sliding_window_length,'nt long window (further warning suppressed).')
             warning = False
         n_obs = [_occurrences(t_seq, m) for m in motifs]
-        forces[i] = _DimerForceCodons_fast(t_seq, n_obs, motifs, codon_bias=c_bias)
+        forces[i] = _DimerForceCodons_fast(t_seq, n_obs, motifs, codon_bias=c_bias, add_pseudocount=add_pseudocount)
     return forces
 
 
